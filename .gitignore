@@ -3,3 +3,4 @@ node_modules
 .prod.env
 open-music-app_aryadna.zip
 tester_to_db.txt
+/src/api/uploads/file/pictures

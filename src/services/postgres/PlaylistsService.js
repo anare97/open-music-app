@@ -1,3 +1,4 @@
+/* eslint-disable camelcase */
 const { nanoid } = require('nanoid');
 const { Pool } = require('pg');
 const InvariantError = require('../../exceptions/InvariantError');
@@ -5,9 +6,10 @@ const NotFoundError = require('../../exceptions/NotFoundError');
 const AuthorizationError = require('../../exceptions/AuthorizationError');
 
 class PlaylistsService {
-  constructor(collaborationService) {
+  constructor(collaborationService, cacheService) {
     this._pool = new Pool();
     this._collaborationService = collaborationService;
+    this._cacheService = cacheService;
   }
 
   async verifyPlaylistOwner(id, owner) {
@@ -114,23 +116,34 @@ class PlaylistsService {
     if (!result.rows[0].id) {
       throw new InvariantError('Lagu gagal ditambahkan');
     }
+
+    await this._cacheService.delete(`playlistsongs:${playlistId}`);
   }
 
   async getPlaylistSongs(id) {
-    const query = {
-      text: `SELECT songs.id, songs.title, songs.performer FROM songs
-        LEFT JOIN playlistsongs ON playlistsongs.song_id = songs.id
-        WHERE playlistsongs.playlist_id = $1`,
-      values: [id],
-    };
+    try {
+      const result = await this._cacheService.get(`playlistsongs:${id}`);
+      return JSON.parse(result);
+    } catch (error) {
+      const query = {
+        text: `SELECT songs.id, songs.title, songs.performer FROM songs
+          LEFT JOIN playlistsongs ON playlistsongs.song_id = songs.id
+          WHERE playlistsongs.playlist_id = $1`,
+        values: [id],
+      };
 
-    const result = await this._pool.query(query);
-    return result.rows;
+      const result = await this._pool.query(query);
+      const playlistSongsResult = result.rows;
+
+      await this._cacheService.set(`playlistsongs:${id}`, JSON.stringify(playlistSongsResult));
+
+      return playlistSongsResult;
+    }
   }
 
   async deletePlaylistSong(playlistId, songId) {
     const query = {
-      text: 'DELETE FROM playlistsongs WHERE playlist_id = $1 AND song_id = $2',
+      text: 'DELETE FROM playlistsongs WHERE playlist_id = $1 AND song_id = $2 RETURNING playlist_id',
       values: [playlistId, songId],
     };
 
@@ -139,6 +152,9 @@ class PlaylistsService {
     if (!result.rowCount) {
       throw new InvariantError('Lagu gagal dihapus');
     }
+
+    const { playlist_id } = result.rows[0];
+    await this._cacheService.delete(`playlistsongs:${playlist_id}`);
   }
 }
 
